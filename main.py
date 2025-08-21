@@ -4,7 +4,8 @@ import subprocess
 from tkinter import *
 import tkinter as tk
 from tkinter import filedialog
-from PIL import Image, ImageTk
+import tkinter.font as tkfont
+from PIL import Image, ImageTk, ImageOps
 
 WINDOW_BG_COLOR = "#D9C4B0"
 CANVAS_BG_COLOR = "#ECEEDF"
@@ -13,80 +14,163 @@ BUTTON_COLOR = "#BBDCE5"
 home_dir = os.path.expanduser("~")
 photos_dir = os.path.join(home_dir, "Pictures/Photos")
 
-THUMBNAIL_SIZE = (200, 200)
+THUMBNAIL_SIZE = (150, 150)
+
+
+class Utilities:
+
+    def __init__(self):
+        self.widget = None
+
+    # MOUSEWHEEL EVENT (bind mousewheel to widget)
+    def _on_mousewheel(self, event):
+        if self.widget.tk.call("tk", "windowingsystem") == "aqua":  # macOS
+            self.widget.yview_scroll(-1 * event.delta, "units")
+        else:
+            self.widget.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def bind_mousewheel(self, widget):
+        self.widget = widget
+        widget.bind_all("<MouseWheel>", self._on_mousewheel)  # Windows / Mac
+        widget.bind_all("<Button-4>", lambda e: widget.yview_scroll(-1, "units"))  # Linux
+        widget.bind_all("<Button-5>", lambda e: widget.yview_scroll(1, "units"))
+
+    @staticmethod
+    def unbind_mousewheel(widget):
+        widget.unbind("<MouseWheel>")
+        widget.unbind("<Button-4>")
+        widget.unbind("<Button-5>")
+
+    # CLICK EVENT (show full image via system-default viewer)
+    @staticmethod
+    def on_thumbnail_click(event):
+        system = platform.system()
+        img_path = event.widget.img_path
+
+        if system == "Darwin":
+            subprocess.run(["open", img_path])
+        elif system == "Windows":
+            os.startfile(img_path)
+        else:
+            subprocess.run(["xdg-open", img_path])
+
+    # MISC HELPERS
+    @staticmethod
+    def cols_config(widget, total, expand=None, default_weight=0, expand_weight=1):
+        expand = expand or []
+        for col in range(total):
+            weight = expand_weight if col in expand else default_weight
+            widget.grid_columnconfigure(col, weight=weight)
+
+
 
 class Watermarker(tk.Tk):
 
     def __init__(self):
         super().__init__()
+
         self.title("Watermark-er")
-        self.geometry("800x600")
+        self.minsize(800, 500)
         self.config(padx=50, pady=50)
+
         self.images = dict()
-        # TOOLBAR
-        self.toolbar = tk.Frame(
+        self.utils = Utilities()
+
+        self.UI = dict()
+        self.UI['toolbar'] = self.render_toolbar()
+        self.UI['body'] = self.render_body()
+
+        self.thumbnails = []
+
+
+    def render_toolbar(self):
+        toolbar = tk.Frame(
             self,
             highlightthickness=1,
             highlightbackground=WINDOW_BG_COLOR
         )
-        self.toolbar.pack(side="top", fill="x")
-        # TOOLBAR buttons
-        self.upload_button = tk.Button(
-            self.toolbar,
+        toolbar.pack(side="top", fill="x")
+
+        self.utils.cols_config(
+            widget=toolbar,
+            total=6,
+            expand=[1, 4]
+        )
+
+        upload_button = tk.Button(
+            toolbar,
             text="Select files",
             command=self.open_files,
-            relief="flat",
-            highlightthickness=0
         )
-        self.upload_button.pack(side="left", padx=5, pady=10)
-        self.apply_button = tk.Button(
-            self.toolbar,
+        upload_button.grid(column=0, row=0, padx=5, pady=10)
+
+        wm_label = tk.Label(
+            toolbar,
+            text="Watermark:"
+        )
+        wm_label.grid(column=2, row=0, padx=5, pady=10)
+
+        font = tkfont.Font(size=14)
+        wm_text = tk.Text(
+            toolbar,
+            height=1,
+            width=30,
+            font=font
+        )
+        wm_text.insert('1.0', "marcobernacer@me.com")
+        wm_text.grid(column=3, row=0, padx=5, pady=10)
+
+        apply_button = tk.Button(
+            toolbar,
             text="Apply watermark",
             command=self.open_files
         )
-        self.apply_button.pack(side="left", padx=5, pady=10)
+        apply_button.grid(column=5, row=0, padx=5, pady=10)
 
-        #PREVIEW BOX
-        self.preview = tk.Canvas(self, bg="white", highlightthickness=0)
-        self.preview.pack(side="left", fill="both", expand=True)
+        return {'upload':upload_button, 'watermark': wm_text, 'apply':apply_button}
 
-        scrollbar = tk.Scrollbar(self, orient="vertical", command=self.preview.yview)
+
+    def render_body(self):
+        preview = tk.Canvas(
+            self,
+            bg="white",
+            highlightthickness=0
+        )
+        preview.pack(side="left", fill="both", expand=True)
+
+        scrollbar = tk.Scrollbar(
+            self,
+            orient="vertical",
+            command=preview.yview
+        )
         scrollbar.pack(side="right", fill="y")
-        self.preview.configure(yscrollcommand=scrollbar.set)
-        self.preview_frame = tk.Frame(self.preview, bg="white")
-        self.preview.create_window((0, 0), window=self.preview_frame, anchor="nw")
+        preview.configure(yscrollcommand=scrollbar.set)  # assign the scrollbar
 
-        self.preview.bind("<Enter>", self._bind_mousewheel)
-        self.preview.bind("<Leave>", self._unbind_mousewheel)
-        self.preview.bind("<Configure>", self.relayout)
-        self.preview_frame.bind("<Configure>", self.update_scroll_region)
+        preview_frame = tk.Frame(
+            preview,
+            bg="white"
+        )
+        preview.create_window((0, 0), window=preview_frame, anchor="nw")
 
-        self.thumbnails = []
+        self.utils.bind_mousewheel(preview)
+        preview_frame.bind("<Configure>", lambda e: self.update_scroll_region(preview))
 
-    def update_scroll_region(self, event=None):
-        self.preview.configure(scrollregion=self.preview.bbox("all"))
+        preview.bind("<Configure>", self.relayout)
 
-    def _on_mousewheel(self, event):
-        if self.preview.tk.call("tk", "windowingsystem") == "aqua":  # macOS
-            self.preview.yview_scroll(-1 * event.delta, "units")
-        else:  # Windows / X11
-            self.preview.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        return {'preview': preview, 'preview_frame': preview_frame}
 
-    def _bind_mousewheel(self, event):
-        self.preview.bind_all("<MouseWheel>", self._on_mousewheel)  # Windows / Mac
-        self.preview.bind_all("<Button-4>", lambda e: self.preview.yview_scroll(-1, "units"))  # Linux
-        self.preview.bind_all("<Button-5>", lambda e: self.preview.yview_scroll(1, "units"))
 
-    def _unbind_mousewheel(self, event):
-        self.preview.unbind_all("<MouseWheel>")
-        self.preview.unbind_all("<Button-4>")
-        self.preview.unbind_all("<Button-5>")
+    @staticmethod
+    def update_scroll_region(canvas):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        print("bbox:", canvas.bbox("all"))
+
 
     def relayout(self, event=None):
         if not self.thumbnails:
             return
 
-        width = self.preview.winfo_width()
+        width = self.UI['body']['preview'].winfo_width()
         cols = max(1, width // (THUMBNAIL_SIZE[0] + 10))  # max(1, 800 // (200 + 10)) --> max(1, 3)
 
         for idx, label in enumerate(self.thumbnails):
@@ -95,7 +179,8 @@ class Watermarker(tk.Tk):
             label.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
 
         for col in range(cols):
-            self.preview_frame.grid_columnconfigure(col, weight=1)
+            self.UI['body']['preview_frame'].grid_columnconfigure(col, weight=1)
+
 
     def open_files(self):
         file_paths = filedialog.askopenfilenames(
@@ -122,29 +207,19 @@ class Watermarker(tk.Tk):
             }
 
             label = tk.Label(
-                master=self.preview_frame,
+                master=self.UI['body']['preview_frame'],
                 image=tk_thumb,  # type: ignore
                 text=f"Image: {os.path.basename(path)}",
                 compound='top',
-                background='white'
+                background='white',
+                width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1]
             )
             label.img_path = path
-            label.bind('<Button-1>', on_thumbnail_click)
+            label.bind('<Button-1>', self.utils.on_thumbnail_click)
             self.thumbnails.append(label)
 
         self.relayout()
 
-
-def on_thumbnail_click(event):
-    system = platform.system()
-    img_path = event.widget.img_path
-
-    if system == "Darwin":
-        subprocess.run(["open", img_path])
-    elif system == "Windows":
-        os.startfile(img_path)
-    else:
-        subprocess.run(["xdg-open", img_path])
 
 
 if __name__ == "__main__":
