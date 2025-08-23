@@ -3,7 +3,7 @@ import platform
 import subprocess
 from tkinter import *
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, font, messagebox
 import tkinter.font as tkfont
 from PIL import Image, ImageTk, ImageFont, ImageDraw
 
@@ -11,10 +11,11 @@ WINDOW_BG_COLOR = "#D9C4B0"
 CANVAS_BG_COLOR = "#ECEEDF"
 BUTTON_COLOR = "#BBDCE5"
 
+
 home_dir = os.path.expanduser("~")
 photos_dir = os.path.join(home_dir, "Pictures/Photos")
 
-THUMBNAIL_SIZE = (300, 300)
+THUMBNAIL_SIZE = (200, 200)
 
 
 class Utilities:
@@ -75,20 +76,21 @@ class Watermarker(tk.Tk):
     def __init__(self):
         super().__init__()
 
+        self.BOLD_FONT = font.Font(weight='bold')
+        self.utils = Utilities()
+
         self.title("Watermark-er")
         self.minsize(800, 500)
         self.config(padx=50, pady=50)
 
-        self.images = dict()
-        self.images_out = dict()
-        self.utils = Utilities()
-
         self.UI = dict()
         self.UI['toolbar'] = self.render_toolbar()
         self.UI['body'] = self.render_body()
+        self.UI['options'] = self.render_options()
 
-        self.thumbnails = []
-
+        self.images = dict()
+        self.images_out = dict()
+        self.thumbnails = [] # list of tk.Label widgets
 
     def render_toolbar(self):
         toolbar = tk.Frame(
@@ -136,17 +138,19 @@ class Watermarker(tk.Tk):
 
         return {'upload':upload_button, 'watermark': wm_text, 'apply':apply_button}
 
-
     def render_body(self):
+        body_frame = tk.Frame(self)
+        body_frame.pack(fill='both', expand=True)
+
         preview = tk.Canvas(
-            self,
+            body_frame,
             bg="white",
             highlightthickness=0
         )
-        preview.pack(side="left", fill="both", expand=True)
+        preview.pack(side='left', fill="both", expand=True)
 
         scrollbar = tk.Scrollbar(
-            self,
+            body_frame,
             orient="vertical",
             command=preview.yview
         )
@@ -166,12 +170,39 @@ class Watermarker(tk.Tk):
 
         return {'preview': preview, 'preview_frame': preview_frame}
 
+    def render_options(self):
+        options = tk.Frame(
+            self,
+            highlightthickness=1,
+            highlightbackground='white'
+        )
+        options.pack(side="bottom", fill="x")
+
+        clear_button = tk.Button(
+            options,
+            text="Clear",
+            font=self.BOLD_FONT,
+            fg='red',
+            command=self.clear,
+            state='disabled'
+        )
+        clear_button.pack(side='left', padx=10, pady=10)
+
+        save_button = tk.Button(
+            options,
+            text="Save",
+            font=self.BOLD_FONT,
+            fg='green',
+            command=self.save,
+            state='disabled'
+        )
+        save_button.pack(side='right', padx=10, pady=10)
+
+        return {'clear': clear_button, 'save': save_button}
 
     @staticmethod
     def update_scroll_region(canvas):
         canvas.configure(scrollregion=canvas.bbox("all"))
-        print("bbox:", canvas.bbox("all"))
-
 
     def relayout(self, event=None):
         if not self.thumbnails:
@@ -187,7 +218,6 @@ class Watermarker(tk.Tk):
 
         for col in range(cols):
             self.UI['body']['preview_frame'].grid_columnconfigure(col, weight=1)
-
 
     def open_files(self):
         file_paths = filedialog.askopenfilenames(
@@ -219,16 +249,23 @@ class Watermarker(tk.Tk):
                 text=f"Image: {os.path.basename(path)}",
                 compound='top',
                 background='white',
-                width=THUMBNAIL_SIZE[0], height=THUMBNAIL_SIZE[1]
+                wraplength=THUMBNAIL_SIZE[0],
+                justify='center',
+                fg='black',
+                width=THUMBNAIL_SIZE[0]+20, height=THUMBNAIL_SIZE[1]+20
             )
             label.img_path = path
             label.bind('<Button-1>', self.utils.on_thumbnail_click)
             self.thumbnails.append(label)
 
         self.relayout()
-
+        self.UI['options']['clear'].config(state='normal')
 
     def apply_watermark(self):
+        if self.images_out:
+            if not messagebox.askyesno('Overwrite?','Images are already watermarked. Overwrite changes?'):
+                return
+
         watermark =  self.UI['toolbar']['watermark'].get('1.0', tk.END)
 
         for idx, data in self.images.items():
@@ -241,12 +278,12 @@ class Watermarker(tk.Tk):
 
             draw = ImageDraw.Draw(txt_layer)
             font_size = int(min(w, h) * 0.05)
-            font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', size=font_size)
+            font_style = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', size=font_size)
             draw.text(
                 xy=(w - 90, h - 90),
                 text=watermark,
                 fill=(255, 255, 255, 150),
-                font=font,
+                font=font_style,
                 anchor='rs'
             )
             watermarked_image = Image.alpha_composite(full_image, txt_layer)
@@ -256,15 +293,51 @@ class Watermarker(tk.Tk):
 
             self.images_out[idx] = {
                 'watermarked': watermarked_image,
-                'thumb': tk_wmarked_thumb
+                'thumb': tk_wmarked_thumb,
+                'label_out': f"Watermarked_image_{idx+1}"
             }
 
         for idx, label in enumerate(self.thumbnails):
-            label.config(image=self.images_out[idx]['thumb'])
+            label.config(
+                image=self.images_out[idx]['thumb'],
+                text=f"✅ {self.images_out[idx]['label_out']}",
+            )
             label.watermarked_image = self.images_out[idx]['watermarked']
 
+        self.UI['options']['save'].config(state='normal')
 
-        # print(watermark)
+    def save(self):
+        folder_loc = filedialog.askdirectory(
+            parent=self,
+            initialdir=photos_dir,
+            title="Select a Folder"
+        )
+
+        if not folder_loc:  # user canceled
+            return
+
+        for idx, image in self.images_out.items():
+            output_label = image['label_out']
+            im = image['watermarked']
+
+            if im.mode in ('RGBA', 'P'):
+                im = im.convert('RGB')
+
+            output_path = os.path.join(folder_loc, f"{output_label}.jpg")
+
+            im.save(output_path, format="JPEG")
+
+        messagebox.showinfo('Success!', 'Your watermarked photos are saved to the chosen directory.')
+
+    def clear(self):
+        for label in self.thumbnails:
+            label.destroy()
+
+        self.thumbnails.clear()
+        self.images.clear()
+        self.images_out.clear()
+        self.UI['options']['save'].config(state='disabled')
+        self.UI['options']['clear'].config(state='disabled')
 
 
 
