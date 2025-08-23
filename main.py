@@ -5,7 +5,7 @@ from tkinter import *
 import tkinter as tk
 from tkinter import filedialog
 import tkinter.font as tkfont
-from PIL import Image, ImageTk, ImageOps
+from PIL import Image, ImageTk, ImageFont, ImageDraw
 
 WINDOW_BG_COLOR = "#D9C4B0"
 CANVAS_BG_COLOR = "#ECEEDF"
@@ -14,7 +14,7 @@ BUTTON_COLOR = "#BBDCE5"
 home_dir = os.path.expanduser("~")
 photos_dir = os.path.join(home_dir, "Pictures/Photos")
 
-THUMBNAIL_SIZE = (150, 150)
+THUMBNAIL_SIZE = (300, 300)
 
 
 class Utilities:
@@ -45,7 +45,14 @@ class Utilities:
     @staticmethod
     def on_thumbnail_click(event):
         system = platform.system()
-        img_path = event.widget.img_path
+
+        if getattr(event.widget, "watermarked_image", None):  # case: modified
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            event.widget.watermarked_image.save(tmp.name)
+            img_path = tmp.name
+        else:  # case: original
+            img_path = event.widget.img_path
 
         if system == "Darwin":
             subprocess.run(["open", img_path])
@@ -63,7 +70,6 @@ class Utilities:
             widget.grid_columnconfigure(col, weight=weight)
 
 
-
 class Watermarker(tk.Tk):
 
     def __init__(self):
@@ -74,6 +80,7 @@ class Watermarker(tk.Tk):
         self.config(padx=50, pady=50)
 
         self.images = dict()
+        self.images_out = dict()
         self.utils = Utilities()
 
         self.UI = dict()
@@ -123,7 +130,7 @@ class Watermarker(tk.Tk):
         apply_button = tk.Button(
             toolbar,
             text="Apply watermark",
-            command=self.open_files
+            command=self.apply_watermark
         )
         apply_button.grid(column=5, row=0, padx=5, pady=10)
 
@@ -219,6 +226,45 @@ class Watermarker(tk.Tk):
             self.thumbnails.append(label)
 
         self.relayout()
+
+
+    def apply_watermark(self):
+        watermark =  self.UI['toolbar']['watermark'].get('1.0', tk.END)
+
+        for idx, data in self.images.items():
+            full_image = data['full'].convert('RGBA')
+
+            size = full_image.size
+            w, h = size
+
+            txt_layer = Image.new('RGBA', size, (255, 255, 255, 0))
+
+            draw = ImageDraw.Draw(txt_layer)
+            font_size = int(min(w, h) * 0.05)
+            font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', size=font_size)
+            draw.text(
+                xy=(w - 90, h - 90),
+                text=watermark,
+                fill=(255, 255, 255, 150),
+                font=font,
+                anchor='rs'
+            )
+            watermarked_image = Image.alpha_composite(full_image, txt_layer)
+            wmarked_thumb = watermarked_image.copy()
+            wmarked_thumb.thumbnail(THUMBNAIL_SIZE)
+            tk_wmarked_thumb = ImageTk.PhotoImage(wmarked_thumb)
+
+            self.images_out[idx] = {
+                'watermarked': watermarked_image,
+                'thumb': tk_wmarked_thumb
+            }
+
+        for idx, label in enumerate(self.thumbnails):
+            label.config(image=self.images_out[idx]['thumb'])
+            label.watermarked_image = self.images_out[idx]['watermarked']
+
+
+        # print(watermark)
 
 
 
